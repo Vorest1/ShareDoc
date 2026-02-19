@@ -1,0 +1,70 @@
+# ---------------------------
+# Python
+# ---------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# dotenv (секреты)
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# PyCharm
+*.iml
+
+# Logs
+*.log
+
+# Coverage / test
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+
+# Mypy
+.mypy_cache/
+
+# Ruff
+.ruff_cache/
+
+# ---------------------------
+# OS
+# ---------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------------------------
+# Project specific
+# ---------------------------
+
+# Generated documents
+output/
+*.generated.docx
+
+# Temporary Word files
+~$*.docx
+
+# Backup docs
+*.bak
