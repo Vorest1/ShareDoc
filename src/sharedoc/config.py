@@ -12,4 +12,16 @@ class DbConfig:
     user: str = os.getenv("DB_USER", "postgres")
     password: str = os.getenv("DB_PASSWORD", "admin")
 
+
+@dataclass(frozen=True)
+class SmtpConfig:
+    host: str = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    port: int = int(os.getenv("SMTP_PORT", "587"))
+    user: str = os.getenv("SMTP_USER", "")
+    password: str = os.getenv("SMTP_PASSWORD", "")
+    from_email: str = os.getenv("SMTP_FROM", os.getenv("SMTP_USER", ""))
+    to_email: str = os.getenv("SMTP_TO", "khristoforov.volodya@gmail.com")
+
+
 DB = DbConfig()
+SMTP = SmtpConfig()

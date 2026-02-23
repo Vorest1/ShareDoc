@@ -1,6 +1,8 @@
 from pathlib import Path
 from docxtpl import DocxTemplate
 from sharedoc.db import get_contract_data
+from sharedoc.config import SMTP
+from sharedoc.mailer import send_contract_email
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -27,3 +29,5 @@ def generate_contract(contract_id: int, out_dir: Path | None = None) -> Path:
 def main():
     out = generate_contract(1)
     print(f"Document is created: {out}")
+    send_contract_email(out)
+    print(f"Email sent to: {SMTP.to_email}")
