@@ -1,0 +1,4 @@
+docxtpl
+psycopg2-binary
+python-dotenv
+PyQt6
