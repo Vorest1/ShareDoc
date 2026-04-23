@@ -15,18 +15,20 @@ class DocumentRenderError(Exception):
 
 
 def get_template_path(template_key: str) -> Path:
-    filename = TEMPLATE_FILES.get(template_key)
-    if not filename:
+    candidates = TEMPLATE_FILES.get(template_key)
+    if not candidates:
         raise DocumentRenderError(
             "Неизвестный тип шаблона. "
             "Используйте один из: scientific_guidance, qualification, contract_offer"
         )
 
-    path = APP.template_dir / filename
-    if not path.exists():
-        raise DocumentRenderError(f"Шаблон не найден: {path}")
+    for filename in candidates:
+        path = APP.template_dir / filename
+        if path.exists():
+            return path
 
-    return path
+    tried = ", ".join(str(APP.template_dir / name) for name in candidates)
+    raise DocumentRenderError(f"Шаблон не найден. Проверены пути: {tried}")
 
 
 def render_document(bundle: ContractBundle, template_key: str) -> Path:

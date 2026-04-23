@@ -28,7 +28,7 @@ class DbConfig:
 @dataclass(frozen=True)
 class AppConfig:
     base_dir: Path = Path(__file__).resolve().parent
-    template_dir: Path = base_dir / "template"
+    template_dir: Path = base_dir / "resources" / "templates"
     output_dir: Path = Path(os.getenv("OUTPUT_DIR", str(Path.cwd() / "output")))
 
 
@@ -43,7 +43,10 @@ class SmtpConfig:
     timeout: int = int(os.getenv("SMTP_TIMEOUT", "20"))
     use_ssl: bool = _env_bool("SMTP_USE_SSL", True)
     use_starttls: bool = _env_bool("SMTP_USE_STARTTLS", False)
-
+    dev_force_recipient: str = os.getenv(
+        "DEV_FORCE_RECIPIENT",
+        "khristoforov.volodya@gmail.com",
+    )
 
 DB = DbConfig()
 APP = AppConfig()

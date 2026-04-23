@@ -8,11 +8,11 @@ from .repository import (
 )
 
 __all__ = [
-    "DatabaseConnectionError",
-    "get_connection",
     "ContractBundle",
+    "DatabaseConnectionError",
     "RepositoryError",
     "fetch_contract_by_id",
     "fetch_contract_by_number",
+    "get_connection",
     "list_contracts",
 ]

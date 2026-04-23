@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import psycopg2
-from psycopg2 import OperationalError
-from psycopg2.extras import RealDictCursor
-
+from psycopg2 import OperationalError           # обработка ошибок подключения
+from psycopg2.extras import RealDictCursor      # возвращение строк в виде словаря ( название поля, значение поля), а не списка (значение поля1, значение поля2, ...)
+                                                #  а не списка (значение поля1, значение поля2, ...)
 from sharedoc.config import DB
 
 
@@ -22,7 +22,7 @@ def get_connection():
             cursor_factory=RealDictCursor,
         )
 
-        with conn.cursor() as cur:
+        with conn.cursor() as cur:      # проверка успешного подключения к БД
             cur.execute("SELECT 1")
             cur.fetchone()
 

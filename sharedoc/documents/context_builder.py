@@ -252,6 +252,70 @@ def build_output_filename(template_key: str, contract: dict[str, Any]) -> str:
     return f"{prefix}_{contract_number}_{short_name}.docx"
 
 
+def _address_part(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def build_full_address(contract: dict[str, Any]) -> str:
+    postal_code = _address_part(contract.get("address_postal_code"))
+    region = _address_part(contract.get("address_region"))
+    city = _address_part(contract.get("address_city"))
+    settlement = _address_part(contract.get("address_settlement"))
+    street = _address_part(contract.get("address_street"))
+    house = _address_part(contract.get("address_house"))
+    building = _address_part(contract.get("address_building"))
+    premises = _address_part(contract.get("address_premises"))
+
+    parts: list[str] = []
+
+    if postal_code:
+        parts.append(postal_code)
+    if region:
+        parts.append(region)
+    if city:
+        parts.append(f"г. {city}")
+    if settlement:
+        parts.append(settlement)
+    if street:
+        parts.append(f"ул. {street}")
+    if house:
+        parts.append(f"д. {house}")
+    if building:
+        parts.append(building)
+    if premises:
+        parts.append(f"помещ. {premises}")
+
+    return ", ".join(parts)
+
+
+def build_mailing_address(contract: dict[str, Any]) -> str:
+    postal_code = _address_part(contract.get("address_postal_code"))
+    region = _address_part(contract.get("address_region"))
+    city = _address_part(contract.get("address_city"))
+    street = _address_part(contract.get("address_street"))
+    house = _address_part(contract.get("address_house"))
+    building = _address_part(contract.get("address_building"))
+
+    parts: list[str] = []
+
+    if postal_code:
+        parts.append(postal_code)
+    if region:
+        parts.append(region)
+    if city:
+        parts.append(f"г. {city}")
+    if street:
+        parts.append(f"ул. {street}")
+    if house:
+        parts.append(f"д. {house}")
+    if building:
+        parts.append(building)
+
+    return ", ".join(parts)
+
+
 def build_context(bundle: ContractBundle, template_key: str) -> dict[str, Any]:
     contract = bundle.contract
     students = bundle.students
@@ -263,6 +327,9 @@ def build_context(bundle: ContractBundle, template_key: str) -> dict[str, Any]:
     training_end_date = contract["training_end_date"]
     reply_deadline = contract["reply_deadline"]
 
+    full_address = build_full_address(contract)
+    mailing_address = build_mailing_address(contract)
+
     computed_listeners_count = len(students) if students else int(contract["listeners_count"] or 0)
     listeners_count_value = int(contract["listeners_count"] or computed_listeners_count)
 
@@ -273,16 +340,34 @@ def build_context(bundle: ContractBundle, template_key: str) -> dict[str, Any]:
         total_price = Decimal(str(unit_price)) * listeners_count_value
 
     context = {
+        # клиент
         "company_full_name": contract["company_full_name"] or "",
         "company_short_name": contract["company_short_name"] or "",
-        "representative_short_fio_dative": contract["representative_short_fio_dative"] or "",
+        "company_ogrn": contract["ogrn"] or "",
+        "company_inn": contract["inn"] or "",
+        "company_kpp": contract["kpp"] or "",
+        "company_bank_account": contract["bank_account"] or "",
+        "company_corr_account": contract["corr_account"] or "",
+        "company_bik": contract["bik"] or "",
+        "company_bank_name": contract["bank_name"] or "",
+        "company_payment_recipient": contract["payment_recipient"] or "",
+
+        # адреса для шаблонов
+        "company_legal_address": full_address,
+        "company_postal_address": full_address,
+        "company_mailing_address": mailing_address,
+
+        # представитель
+        "representative_short_fio_dative": contract["short_fio_dative"] or "",
         "representative_email": contract["representative_email"] or "",
-        "representative_name_patronymic": contract["representative_name_patronymic"] or "",
-        "representative_position_genitive": contract["representative_position_genitive"] or "",
-        "representative_full_name_genitive": contract["representative_full_name_genitive"] or "",
-        "representative_position_nominative": contract["representative_position_nominative"] or "",
-        "representative_initials": contract["representative_initials"] or "",
-        "representative_basis": contract["representative_basis"] or "",
+        "representative_name_patronymic": contract["name_patronymic"] or "",
+        "representative_position_genitive": contract["position_genitive"] or "",
+        "representative_full_name_genitive": contract["full_name_genitive"] or "",
+        "representative_position_nominative": contract["position_nominative"] or "",
+        "representative_initials": contract["initials"] or "",
+        "representative_basis": contract["basis"] or "",
+
+        # программа / договор
         "program_name": contract["program_name"] or "",
         "training_start_date_text": format_date_dotted(training_start_date),
         "training_end_date_text": format_date_dotted(training_end_date),
@@ -296,20 +381,13 @@ def build_context(bundle: ContractBundle, template_key: str) -> dict[str, Any]:
         "listeners_count": listeners_count_value,
         "listeners_count_text": listeners_count_text(listeners_count_value),
         "total_price_text_full": money_to_full_text(total_price),
-        "company_legal_address": contract["company_legal_address"] or "",
-        "company_postal_address": contract["company_postal_address"] or "",
-        "company_mailing_address": contract["company_mailing_address"] or "",
-        "company_ogrn": contract["company_ogrn"] or "",
-        "company_inn": contract["company_inn"] or "",
-        "company_kpp": contract["company_kpp"] or "",
-        "company_bank_account": contract["company_bank_account"] or "",
-        "company_corr_account": contract["company_corr_account"] or "",
-        "company_bik": contract["company_bik"] or "",
-        "company_bank_name": contract["company_bank_name"] or "",
-        "company_payment_recipient": contract["company_payment_recipient"] or "",
-        "company_contact_full_name": contract["company_contact_full_name"] or "",
-        "company_contact_phone": contract["company_contact_phone"] or "",
-        "company_contact_email": contract["company_contact_email"] or "",
+
+        # контакт по договору
+        "company_contact_full_name": contract["contact_full_name"] or "",
+        "company_contact_phone": contract["contact_phone"] or "",
+        "company_contact_email": contract["contact_email"] or "",
+
+        # слушатели
         "students": [
             {
                 "row_no": student.get("row_no", index + 1),

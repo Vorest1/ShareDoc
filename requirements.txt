@@ -1,4 +1,4 @@
-docxtpl
-psycopg2-binary
-python-dotenv
-PyQt6
+python-dotenv>=1.0
+docxtpl>=0.16
+psycopg2-binary>=2.9
+PyQt6>=6.6

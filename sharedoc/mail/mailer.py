@@ -7,7 +7,7 @@ from email.message import EmailMessage
 from pathlib import Path
 from smtplib import SMTPException
 
-from .config import SMTP
+from ..config import SMTP
 
 
 DEFAULT_EMAIL_SUBJECT = "Документы"
@@ -17,12 +17,9 @@ DEFAULT_EMAIL_BODY = (
     "ФГАНУ ЦИТиС"
 )
 
-# все документы отправляются только на почту во время разработки
-# DEV_FORCE_RECIPIENT = "vladudmurt@gmail.com"
-DEV_FORCE_RECIPIENT = "khristoforov.volodya@gmail.com"
 
 class MailerError(Exception):
-    pass
+    """Ошибка отправки письма."""
 
 
 def _smtp_attempts() -> list[tuple[int, bool, bool]]:
@@ -45,20 +42,20 @@ def _smtp_hosts() -> list[str]:
     return hosts
 
 
+def get_development_recipient() -> str:
+    recipient = (SMTP.dev_force_recipient or SMTP.to_email or "").strip()
+    if not recipient:
+        raise MailerError("Не указан email разработчика для тестовой отправки")
+    return recipient
+
+
 def send_document_email(
     document_path: Path,
     to_email: str | None = None,
     subject: str | None = None,
     body: str | None = None,
 ) -> None:
-
-    recipient = DEV_FORCE_RECIPIENT
-
-    # РЕЛИЗНЫЙ ВАРИАНТ:
-    # recipient = (to_email or SMTP.to_email or "").strip()
-
-    if not recipient:
-        raise MailerError("Не указан email получателя")
+    recipient = get_development_recipient()
 
     if not document_path.exists():
         raise MailerError(f"Файл для отправки не найден: {document_path}")
@@ -70,6 +67,11 @@ def send_document_email(
     message["Subject"] = subject or DEFAULT_EMAIL_SUBJECT
     message["From"] = SMTP.from_email or SMTP.user
     message["To"] = recipient
+
+    # Для отладки сохраняем, кому письмо "хотели" отправить по бизнес-логике.
+    if to_email:
+        message["X-Original-Requested-To"] = to_email
+
     message.set_content(body or DEFAULT_EMAIL_BODY)
 
     mime_type, _ = mimetypes.guess_type(document_path.name)
@@ -120,7 +122,4 @@ def send_document_email(
                 mode = "SSL" if use_ssl else ("STARTTLS" if use_starttls else "PLAIN")
                 errors.append(f"{host}:{port} {mode} -> {exc.__class__.__name__}: {exc}")
 
-    raise MailerError(
-        "Не удалось отправить письмо. "
-        + " | ".join(errors)
-    )
+    raise MailerError("Не удалось отправить письмо. " + " | ".join(errors))
