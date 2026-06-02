@@ -68,7 +68,7 @@ def send_document_email(
     message["From"] = SMTP.from_email or SMTP.user
     message["To"] = recipient
 
-    # Для отладки сохраняем, кому письмо "хотели" отправить по бизнес-логике.
+    # Для отладки сохраняем, кому письмо "хотели" отправить по бизнес-логике.4
     if to_email:
         message["X-Original-Requested-To"] = to_email
 
