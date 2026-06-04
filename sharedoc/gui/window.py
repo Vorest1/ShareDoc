@@ -6,9 +6,14 @@ from PyQt6.QtCore import QRect, Qt, QSignalBlocker, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QFontMetrics
 from PyQt6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFrame,
     QGroupBox,
+    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -41,6 +46,29 @@ from .backend import (
     list_client_summaries,
     list_contract_summaries,
     send_document,
+)
+
+from sharedoc.db.auth_repository import AuthUser, AuthenticationError
+from sharedoc.services.admin_service import (
+    AdminServiceError,
+    admin_create_row,
+    admin_create_user,
+    admin_delete_row,
+    admin_get_row,
+    admin_list_roles,
+    admin_list_rows,
+    admin_list_users,
+    admin_set_user_active,
+    admin_update_row,
+    admin_update_user,
+    admin_update_user_role,
+    get_admin_entities,
+)
+from sharedoc.services.auth_service import AuthServiceError, login as auth_login
+from sharedoc.services.history_service import (
+    HistoryServiceError,
+    get_all_dispatches,
+    get_my_dispatches,
 )
 
 
@@ -110,6 +138,7 @@ class GeneratePage(QWidget):
         super().__init__()
 
         self.selected_template_key: str | None = None
+        self.current_user: AuthUser | None = None
         self.client_summaries: list[ClientSummary] = []
         self.contract_summaries: list[ContractSummary] = []
 
@@ -122,6 +151,9 @@ class GeneratePage(QWidget):
         self._build_ui()
         self._load_reference_data()
         self._set_step(self.STEP_TEMPLATE)
+
+    def set_actor(self, user: AuthUser) -> None:
+        self.current_user = user
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -1015,6 +1047,7 @@ class GeneratePage(QWidget):
                 self.generated_documents = generate_documents_for_clients(
                     template_key=self.selected_template_key,
                     client_ids=self.selected_client_ids,
+                    actor=self.current_user,
                 )
             elif self.selected_template_key in CONTRACT_TEMPLATE_KEYS:
                 if not self.selected_contract_ids:
@@ -1027,6 +1060,7 @@ class GeneratePage(QWidget):
                 self.generated_documents = generate_documents_for_contracts(
                     template_key=self.selected_template_key,
                     contract_ids=self.selected_contract_ids,
+                    actor=self.current_user,
                 )
             else:
                 QMessageBox.warning(self, "Нет шаблона", "Сначала выберите шаблон.")
@@ -1114,10 +1148,14 @@ class SendPage(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.current_file_path: Path | None = None
+        self.current_user: AuthUser | None = None
         self.send_documents: list[GeneratedDocument] = []
         self.is_mass_mode = False
         self._build_ui()
         self.reset()
+
+    def set_actor(self, user: AuthUser) -> None:
+        self.current_user = user
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -1367,6 +1405,8 @@ class SendPage(QWidget):
                         subject=item.subject,
                         body=body,
                         cc=cc,
+                        actor=self.current_user,
+                        document_id=item.document_id,
                     )
 
                 self.send_info.setText(
@@ -1408,12 +1448,15 @@ class SendPage(QWidget):
             return
 
         try:
+            document_id = self.send_documents[0].document_id if self.send_documents else None
             send_document(
                 file_path=self.current_file_path,
                 to_email=to_email,
                 subject=subject,
                 body=body,
                 cc=cc,
+                actor=self.current_user,
+                document_id=document_id,
             )
             self.send_info.setText(
                 "Письмо успешно отправлено.\n"
@@ -1453,108 +1496,772 @@ class SendPage(QWidget):
         self.send_button.setText("Отправить письмо")
 
 
+
+class LoginPage(QWidget):
+    logged_in = pyqtSignal(object)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        wrapper = QWidget()
+        wrapper_layout = QVBoxLayout(wrapper)
+        wrapper_layout.setContentsMargins(420, 120, 420, 120)
+        wrapper_layout.setSpacing(16)
+
+        title = QLabel("ShareDoc")
+        title.setObjectName("pageTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        subtitle = QLabel("Вход в корпоративную систему")
+        subtitle.setObjectName("pageSubtitle")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        box = QGroupBox("Авторизация")
+        box_layout = QVBoxLayout(box)
+        box_layout.setSpacing(12)
+
+        self.username_input = QLineEdit()
+        self.username_input.setPlaceholderText("Логин")
+        self.password_input = QLineEdit()
+        self.password_input.setPlaceholderText("Пароль")
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password_input.returnPressed.connect(self._login)
+
+        self.login_button = QPushButton("Войти")
+        self.login_button.setObjectName("primaryButton")
+        self.login_button.clicked.connect(self._login)
+
+        self.info_label = AutoHeightLabel(
+            "Введите логин и пароль пользователя, созданного администратором.",
+            "infoCard",
+        )
+
+        box_layout.addWidget(self.info_label)
+        box_layout.addWidget(self.username_input)
+        box_layout.addWidget(self.password_input)
+        box_layout.addWidget(self.login_button)
+
+        wrapper_layout.addStretch(1)
+        wrapper_layout.addWidget(title)
+        wrapper_layout.addWidget(subtitle)
+        wrapper_layout.addWidget(box)
+        wrapper_layout.addStretch(2)
+
+        root.addWidget(wrapper)
+
+    def _login(self) -> None:
+        username = self.username_input.text().strip()
+        password = self.password_input.text()
+
+        if not username or not password:
+            QMessageBox.warning(self, "Нет данных", "Введите логин и пароль.")
+            return
+
+        try:
+            user = auth_login(username, password)
+            self.logged_in.emit(user)
+        except AuthenticationError as exc:
+            QMessageBox.warning(self, "Ошибка входа", str(exc))
+        except AuthServiceError as exc:
+            QMessageBox.critical(self, "Ошибка авторизации", str(exc))
+        except Exception as exc:
+            QMessageBox.critical(self, "Ошибка авторизации", f"Не удалось выполнить вход: {exc}")
+
+
+class UserEditDialog(QDialog):
+    def __init__(
+        self,
+        roles: list[dict[str, object]],
+        user: dict[str, object] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.roles = roles
+        self.user = user
+        self.setWindowTitle("Пользователь" if user else "Новый пользователь")
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self.username_input = QLineEdit(str(self.user.get("username", "")) if self.user else "")
+        self.password_input = QLineEdit()
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.full_name_input = QLineEdit(str(self.user.get("full_name", "")) if self.user else "")
+        self.email_input = QLineEdit(str(self.user.get("email", "")) if self.user else "")
+        self.role_combo = QComboBox()
+        self.active_checkbox = QCheckBox("Пользователь активен")
+        self.active_checkbox.setChecked(bool(self.user.get("is_active", True)) if self.user else True)
+
+        current_role = str(self.user.get("role_code", "")) if self.user else "employee"
+        for role in self.roles:
+            code = str(role.get("code", ""))
+            name = str(role.get("name", code))
+            self.role_combo.addItem(f"{name} ({code})", code)
+            if code == current_role:
+                self.role_combo.setCurrentIndex(self.role_combo.count() - 1)
+
+        if self.user:
+            self.username_input.setReadOnly(True)
+            self.password_input.setPlaceholderText("Пароль не изменяется в этом окне")
+            self.password_input.setEnabled(False)
+        else:
+            self.password_input.setPlaceholderText("Пароль нового пользователя")
+
+        form.addRow("Логин", self.username_input)
+        form.addRow("Пароль", self.password_input)
+        form.addRow("ФИО", self.full_name_input)
+        form.addRow("Email", self.email_input)
+        form.addRow("Роль", self.role_combo)
+        form.addRow("Активность", self.active_checkbox)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout.addLayout(form)
+        layout.addWidget(buttons)
+
+    def get_payload(self) -> dict[str, object]:
+        return {
+            "username": self.username_input.text().strip(),
+            "password": self.password_input.text(),
+            "full_name": self.full_name_input.text().strip(),
+            "email": self.email_input.text().strip() or None,
+            "role_code": str(self.role_combo.currentData()),
+            "is_active": self.active_checkbox.isChecked(),
+        }
+
+
+class AdminUsersPage(QWidget):
+    def __init__(self, actor: AuthUser) -> None:
+        super().__init__()
+        self.actor = actor
+        self.rows: list[dict[str, object]] = []
+        self.roles: list[dict[str, object]] = []
+        self._build_ui()
+        self._load()
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 24, 24, 24)
+        root.setSpacing(16)
+
+        title = QLabel("Пользователи")
+        title.setObjectName("pageTitle")
+        subtitle = QLabel("Администратор управляет учетными записями, ролями и активностью пользователей.")
+        subtitle.setObjectName("pageSubtitle")
+        subtitle.setWordWrap(True)
+
+        buttons = QHBoxLayout()
+        self.refresh_button = QPushButton("Обновить")
+        self.refresh_button.clicked.connect(self._load)
+        self.create_button = QPushButton("Добавить пользователя")
+        self.create_button.setObjectName("primaryButton")
+        self.create_button.clicked.connect(self._create_user)
+        self.edit_button = QPushButton("Изменить")
+        self.edit_button.clicked.connect(self._edit_user)
+
+        buttons.addWidget(self.refresh_button)
+        buttons.addWidget(self.create_button)
+        buttons.addWidget(self.edit_button)
+        buttons.addStretch(1)
+
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["ID", "Логин", "ФИО", "Email", "Роль", "Активен"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+
+        root.addWidget(title)
+        root.addWidget(subtitle)
+        root.addLayout(buttons)
+        root.addWidget(self.table, 1)
+
+    def _load(self) -> None:
+        try:
+            self.roles = admin_list_roles(self.actor)
+            self.rows = admin_list_users(self.actor)
+            self._fill_table()
+        except AdminServiceError as exc:
+            QMessageBox.critical(self, "Ошибка", str(exc))
+
+    def _fill_table(self) -> None:
+        self.table.setRowCount(len(self.rows))
+        for row_index, row in enumerate(self.rows):
+            values = [
+                row.get("id", ""),
+                row.get("username", ""),
+                row.get("full_name", ""),
+                row.get("email", ""),
+                row.get("role_name", row.get("role_code", "")),
+                "Да" if row.get("is_active") else "Нет",
+            ]
+            for col_index, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                if col_index == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, int(row["id"]))
+                self.table.setItem(row_index, col_index, item)
+
+    def _selected_user_id(self) -> int | None:
+        row = self.table.currentRow()
+        if row < 0:
+            return None
+        item = self.table.item(row, 0)
+        if item is None:
+            return None
+        return int(item.data(Qt.ItemDataRole.UserRole))
+
+    def _selected_user(self) -> dict[str, object] | None:
+        user_id = self._selected_user_id()
+        if user_id is None:
+            return None
+        for row in self.rows:
+            if int(row["id"]) == user_id:
+                return row
+        return None
+
+    def _create_user(self) -> None:
+        dialog = UserEditDialog(self.roles, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        payload = dialog.get_payload()
+        if not payload["username"] or not payload["password"] or not payload["full_name"]:
+            QMessageBox.warning(self, "Недостаточно данных", "Укажите логин, пароль и ФИО.")
+            return
+        try:
+            admin_create_user(
+                self.actor,
+                username=str(payload["username"]),
+                password=str(payload["password"]),
+                full_name=str(payload["full_name"]),
+                email=payload["email"] if isinstance(payload["email"], str) else None,
+                role_code=str(payload["role_code"]),
+            )
+            self._load()
+        except AdminServiceError as exc:
+            QMessageBox.critical(self, "Ошибка", str(exc))
+
+    def _edit_user(self) -> None:
+        user = self._selected_user()
+        if user is None:
+            QMessageBox.warning(self, "Нет выбора", "Выберите пользователя.")
+            return
+        dialog = UserEditDialog(self.roles, user=user, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        payload = dialog.get_payload()
+        try:
+            user_id = int(user["id"])
+            admin_update_user(
+                self.actor,
+                user_id=user_id,
+                full_name=str(payload["full_name"]),
+                email=payload["email"] if isinstance(payload["email"], str) else None,
+            )
+            admin_update_user_role(self.actor, user_id, str(payload["role_code"]))
+            admin_set_user_active(self.actor, user_id, bool(payload["is_active"]))
+            self._load()
+        except AdminServiceError as exc:
+            QMessageBox.critical(self, "Ошибка", str(exc))
+
+
+class RowEditDialog(QDialog):
+    def __init__(
+        self,
+        columns: list[str],
+        row: dict[str, object] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.columns = columns
+        self.row = row or {}
+        self.inputs: dict[str, QLineEdit] = {}
+        self.setWindowTitle("Запись")
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        for column in self.columns:
+            value = self.row.get(column, "")
+            field = QLineEdit("" if value is None else str(value))
+            self.inputs[column] = field
+            form.addRow(column, field)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addLayout(form)
+        layout.addWidget(buttons)
+
+    def get_data(self) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for column, field in self.inputs.items():
+            text = field.text().strip()
+            if text == "":
+                result[column] = None
+                continue
+            lower = text.lower()
+            if lower in {"true", "yes", "1", "да"}:
+                result[column] = True
+            elif lower in {"false", "no", "0", "нет"}:
+                result[column] = False
+            else:
+                result[column] = text
+        return result
+
+
+class AdminCrudPage(QWidget):
+    def __init__(self, actor: AuthUser) -> None:
+        super().__init__()
+        self.actor = actor
+        self.entities: list[dict[str, object]] = []
+        self.current_entity: str | None = None
+        self.current_columns: list[str] = []
+        self.current_editable_columns: list[str] = []
+        self.rows: list[dict[str, object]] = []
+        self._build_ui()
+        self._load_entities()
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 24, 24, 24)
+        root.setSpacing(16)
+
+        title = QLabel("CRUD-управление данными")
+        title.setObjectName("pageTitle")
+        subtitle = QLabel("Администратор заполняет и корректирует справочные и учетные таблицы через прикладной интерфейс.")
+        subtitle.setObjectName("pageSubtitle")
+        subtitle.setWordWrap(True)
+
+        toolbar = QHBoxLayout()
+        self.entity_combo = QComboBox()
+        self.entity_combo.currentIndexChanged.connect(self._on_entity_changed)
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Поиск по выбранной таблице")
+        self.refresh_button = QPushButton("Обновить")
+        self.refresh_button.clicked.connect(self._load_rows)
+        self.create_button = QPushButton("Добавить")
+        self.create_button.setObjectName("primaryButton")
+        self.create_button.clicked.connect(self._create_row)
+        self.edit_button = QPushButton("Изменить")
+        self.edit_button.clicked.connect(self._edit_row)
+        self.delete_button = QPushButton("Удалить")
+        self.delete_button.clicked.connect(self._delete_row)
+
+        toolbar.addWidget(self.entity_combo, 2)
+        toolbar.addWidget(self.search_input, 3)
+        toolbar.addWidget(self.refresh_button)
+        toolbar.addWidget(self.create_button)
+        toolbar.addWidget(self.edit_button)
+        toolbar.addWidget(self.delete_button)
+
+        self.table = QTableWidget(0, 0)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+
+        root.addWidget(title)
+        root.addWidget(subtitle)
+        root.addLayout(toolbar)
+        root.addWidget(self.table, 1)
+
+    def _load_entities(self) -> None:
+        try:
+            self.entities = get_admin_entities(self.actor)
+            self.entity_combo.clear()
+            for entity in self.entities:
+                name = str(entity["entity"])
+                self.entity_combo.addItem(name, name)
+            if self.entities:
+                self._on_entity_changed(0)
+        except AdminServiceError as exc:
+            QMessageBox.critical(self, "Ошибка", str(exc))
+
+    def _on_entity_changed(self, index: int) -> None:
+        if index < 0 or index >= len(self.entities):
+            return
+        entity = self.entities[index]
+        self.current_entity = str(entity["entity"])
+        self.current_columns = list(entity["columns"])
+        self.current_editable_columns = list(entity["editable_columns"])
+        self._load_rows()
+
+    def _load_rows(self) -> None:
+        if not self.current_entity:
+            return
+        try:
+            self.rows = admin_list_rows(
+                self.actor,
+                self.current_entity,
+                limit=200,
+                search=self.search_input.text().strip() or None,
+            )
+            self._fill_table()
+        except AdminServiceError as exc:
+            QMessageBox.critical(self, "Ошибка", str(exc))
+
+    def _fill_table(self) -> None:
+        self.table.setColumnCount(len(self.current_columns))
+        self.table.setHorizontalHeaderLabels(self.current_columns)
+        self.table.setRowCount(len(self.rows))
+        for row_index, row in enumerate(self.rows):
+            for col_index, column in enumerate(self.current_columns):
+                item = QTableWidgetItem(str(row.get(column, "")))
+                if column == "id" and row.get("id") is not None:
+                    item.setData(Qt.ItemDataRole.UserRole, int(row["id"]))
+                self.table.setItem(row_index, col_index, item)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+
+    def _selected_id(self) -> int | None:
+        row = self.table.currentRow()
+        if row < 0:
+            return None
+        try:
+            id_col = self.current_columns.index("id")
+        except ValueError:
+            id_col = 0
+        item = self.table.item(row, id_col)
+        if item is None:
+            return None
+        value = item.data(Qt.ItemDataRole.UserRole) or item.text()
+        return int(value)
+
+    def _create_row(self) -> None:
+        if not self.current_entity:
+            return
+        dialog = RowEditDialog(self.current_editable_columns, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            admin_create_row(self.actor, self.current_entity, dialog.get_data())
+            self._load_rows()
+        except AdminServiceError as exc:
+            QMessageBox.critical(self, "Ошибка", str(exc))
+
+    def _edit_row(self) -> None:
+        if not self.current_entity:
+            return
+        row_id = self._selected_id()
+        if row_id is None:
+            QMessageBox.warning(self, "Нет выбора", "Выберите запись.")
+            return
+        try:
+            row = admin_get_row(self.actor, self.current_entity, row_id)
+            dialog = RowEditDialog(self.current_editable_columns, row=row, parent=self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            admin_update_row(self.actor, self.current_entity, row_id, dialog.get_data())
+            self._load_rows()
+        except AdminServiceError as exc:
+            QMessageBox.critical(self, "Ошибка", str(exc))
+
+    def _delete_row(self) -> None:
+        if not self.current_entity:
+            return
+        row_id = self._selected_id()
+        if row_id is None:
+            QMessageBox.warning(self, "Нет выбора", "Выберите запись.")
+            return
+        answer = QMessageBox.question(
+            self,
+            "Удаление",
+            f"Удалить запись id={row_id} из {self.current_entity}?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            admin_delete_row(self.actor, self.current_entity, row_id)
+            self._load_rows()
+        except AdminServiceError as exc:
+            QMessageBox.critical(self, "Ошибка", str(exc))
+
+
+class DispatchJournalPage(QWidget):
+    def __init__(self, actor: AuthUser, all_users: bool = False) -> None:
+        super().__init__()
+        self.actor = actor
+        self.all_users = all_users
+        self.rows: list[dict[str, object]] = []
+        self._build_ui()
+        self._load()
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 24, 24, 24)
+        root.setSpacing(16)
+
+        title = QLabel("Журнал отправок" if self.all_users else "Моя история")
+        title.setObjectName("pageTitle")
+        subtitle_text = (
+            "Начальник видит документы, отправленные всеми сотрудниками, в хронологическом порядке."
+            if self.all_users
+            else "Здесь отображаются документы, отправленные текущим пользователем."
+        )
+        subtitle = QLabel(subtitle_text)
+        subtitle.setObjectName("pageSubtitle")
+        subtitle.setWordWrap(True)
+
+        toolbar = QHBoxLayout()
+        self.status_combo = QComboBox()
+        self.status_combo.addItem("Все статусы", "")
+        for status in ("send_requested", "sent", "failed", "cancelled"):
+            self.status_combo.addItem(status, status)
+        self.company_search_input = QLineEdit()
+        self.company_search_input.setPlaceholderText("Компания")
+        self.refresh_button = QPushButton("Обновить")
+        self.refresh_button.clicked.connect(self._load)
+
+        if self.all_users:
+            toolbar.addWidget(self.status_combo)
+            toolbar.addWidget(self.company_search_input, 1)
+        toolbar.addWidget(self.refresh_button)
+        toolbar.addStretch(1)
+
+        self.table = QTableWidget(0, 9)
+        self.table.setHorizontalHeaderLabels([
+            "Дата",
+            "Статус",
+            "Тип",
+            "Файл",
+            "Компания",
+            "Договор",
+            "Получатель",
+            "Сотрудник",
+            "Ошибка",
+        ])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+
+        root.addWidget(title)
+        root.addWidget(subtitle)
+        root.addLayout(toolbar)
+        root.addWidget(self.table, 1)
+
+    def _load(self) -> None:
+        try:
+            if self.all_users:
+                self.rows = get_all_dispatches(
+                    self.actor,
+                    limit=300,
+                    status=str(self.status_combo.currentData()) or None,
+                    company_search=self.company_search_input.text().strip() or None,
+                )
+            else:
+                self.rows = get_my_dispatches(self.actor, limit=300)
+            self._fill_table()
+        except HistoryServiceError as exc:
+            QMessageBox.critical(self, "Ошибка", str(exc))
+
+    def _fill_table(self) -> None:
+        self.table.setRowCount(len(self.rows))
+        for row_index, row in enumerate(self.rows):
+            company = row.get("company_short_name") or row.get("company_full_name") or ""
+            sent_by = row.get("sent_by_full_name") or row.get("sent_by_username") or ""
+            date_value = row.get("sent_at") or row.get("dispatch_created_at") or ""
+            values = [
+                date_value,
+                row.get("status", ""),
+                row.get("document_type", ""),
+                row.get("file_name", ""),
+                company,
+                row.get("contract_number", ""),
+                row.get("original_recipient_email") or row.get("recipient_email", ""),
+                sent_by,
+                row.get("error_message", ""),
+            ]
+            for col_index, value in enumerate(values):
+                self.table.setItem(row_index, col_index, QTableWidgetItem(str(value or "")))
+
+
+class ReportsPage(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 24, 24, 24)
+        title = QLabel("Отчеты")
+        title.setObjectName("pageTitle")
+        info = AutoHeightLabel(
+            "Раздел подготовлен под дальнейшее расширение: сводка по количеству отправок, ошибкам, сотрудникам и компаниям. "
+            "На текущем этапе контроль выполняется через журнал отправок.",
+            "infoCard",
+        )
+        root.addWidget(title)
+        root.addWidget(info)
+        root.addStretch(1)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
+        self.current_user: AuthUser | None = None
         self.setWindowTitle("ShareDoc")
         self.resize(1440, 920)
         self.setMinimumSize(1240, 820)
-
-        self._build_ui()
+        self._build_login_ui()
         self._apply_styles()
 
-    def _build_ui(self) -> None:
+    def _build_login_ui(self) -> None:
+        self.login_page = LoginPage()
+        self.login_page.logged_in.connect(self._on_logged_in)
+        self.setCentralWidget(self.login_page)
+        self.setStatusBar(QStatusBar())
+        self.statusBar().showMessage("Требуется вход")
+
+    def _on_logged_in(self, user: AuthUser) -> None:
+        self.current_user = user
+        self._build_role_ui()
+        self.statusBar().showMessage(f"Вход выполнен: {user.full_name} / {user.role_name}")
+
+    def _build_role_ui(self) -> None:
+        if self.current_user is None:
+            self._build_login_ui()
+            return
+
         central = QWidget()
         self.setCentralWidget(central)
-
         root = QHBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(260)
-
+        sidebar.setFixedWidth(280)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(18, 18, 18, 18)
         sidebar_layout.setSpacing(12)
 
         app_title = QLabel("ShareDoc")
         app_title.setObjectName("appTitle")
-
-        app_subtitle = QLabel("Подготовка и отправка документов")
+        app_subtitle = QLabel(f"{self.current_user.full_name}\n{self.current_user.role_name}")
         app_subtitle.setObjectName("appSubtitle")
         app_subtitle.setWordWrap(True)
 
-        self.nav_generate = QPushButton("Создать документ")
-        self.nav_generate.setCheckable(True)
-        self.nav_send = QPushButton("Отправить документ")
-        self.nav_send.setCheckable(True)
-
-        for button in (self.nav_generate, self.nav_send):
-            button.setMinimumHeight(46)
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.setSizePolicy(
-                QSizePolicy.Policy.Expanding,
-                QSizePolicy.Policy.Fixed,
-            )
-
-        nav_group = QButtonGroup(self)
-        nav_group.setExclusive(True)
-        nav_group.addButton(self.nav_generate, 0)
-        nav_group.addButton(self.nav_send, 1)
-        self.nav_generate.setChecked(True)
-
         self.pages = QStackedWidget()
-        self.generate_page = GeneratePage()
-        self.send_page = SendPage()
-
-        self.pages.addWidget(self.generate_page)
-        self.pages.addWidget(self.send_page)
-
-        self.nav_generate.clicked.connect(lambda: self.pages.setCurrentIndex(0))
-        self.nav_send.clicked.connect(lambda: self.pages.setCurrentIndex(1))
-
-        self.generate_page.open_send_page.connect(self._open_send_page)
-        self.send_page.send_completed.connect(self._reset_after_send)
+        self.nav_group = QButtonGroup(self)
+        self.nav_group.setExclusive(True)
+        self._nav_buttons: list[QPushButton] = []
 
         sidebar_layout.addWidget(app_title)
         sidebar_layout.addWidget(app_subtitle)
         sidebar_layout.addSpacing(14)
-        sidebar_layout.addWidget(self.nav_generate)
-        sidebar_layout.addWidget(self.nav_send)
-        sidebar_layout.addStretch(1)
 
-        help_label = QLabel(
-            "Порядок работы:\n"
-            "1. Выберите шаблон\n"
-            "2. Выберите данные\n"
-            "3. Проверьте данные\n"
-            "4. Сформируйте и отправьте документы"
-        )
+        role_code = self.current_user.role_code
+
+        if role_code == "admin":
+            self._add_nav_page(sidebar_layout, "Пользователи", AdminUsersPage(self.current_user))
+            self._add_nav_page(sidebar_layout, "CRUD данных", AdminCrudPage(self.current_user))
+            self._add_nav_page(sidebar_layout, "Журнал отправок", DispatchJournalPage(self.current_user, all_users=True))
+            help_text = (
+                "Администратор управляет пользователями и данными БД. "
+                "Генерация и отправка документов для этой роли отключены."
+            )
+        elif role_code == "manager":
+            self.generate_page = GeneratePage()
+            self.generate_page.set_actor(self.current_user)
+            self.send_page = SendPage()
+            self.send_page.set_actor(self.current_user)
+            self.generate_page.open_send_page.connect(self._open_send_page)
+            self.send_page.send_completed.connect(self._reset_after_send)
+
+            self._add_nav_page(sidebar_layout, "Создать документ", self.generate_page)
+            self._add_nav_page(sidebar_layout, "Отправить документ", self.send_page)
+            self._add_nav_page(sidebar_layout, "Моя история", DispatchJournalPage(self.current_user, all_users=False))
+            self._add_nav_page(sidebar_layout, "Журнал отправок", DispatchJournalPage(self.current_user, all_users=True))
+            self._add_nav_page(sidebar_layout, "Отчеты", ReportsPage())
+            help_text = (
+                "Начальник имеет расширенные возможности сотрудника: "
+                "создание и отправка документов, а также контроль отправок всех сотрудников."
+            )
+        else:
+            self.generate_page = GeneratePage()
+            self.generate_page.set_actor(self.current_user)
+            self.send_page = SendPage()
+            self.send_page.set_actor(self.current_user)
+            self.generate_page.open_send_page.connect(self._open_send_page)
+            self.send_page.send_completed.connect(self._reset_after_send)
+
+            self._add_nav_page(sidebar_layout, "Создать документ", self.generate_page)
+            self._add_nav_page(sidebar_layout, "Отправить документ", self.send_page)
+            self._add_nav_page(sidebar_layout, "Моя история", DispatchJournalPage(self.current_user, all_users=False))
+            help_text = (
+                "Сотрудник выбирает шаблон, проверяет данные, формирует и отправляет документы."
+            )
+
+        if self._nav_buttons:
+            self._nav_buttons[0].setChecked(True)
+            self.pages.setCurrentIndex(0)
+
+        sidebar_layout.addStretch(1)
+        help_label = QLabel(help_text)
         help_label.setObjectName("helpLabel")
         help_label.setWordWrap(True)
         sidebar_layout.addWidget(help_label)
 
+        logout_button = QPushButton("Выйти")
+        logout_button.clicked.connect(self._logout)
+        sidebar_layout.addWidget(logout_button)
+
         root.addWidget(sidebar)
         root.addWidget(self.pages, 1)
 
-        status = QStatusBar()
-        status.showMessage("Готово к работе")
-        self.setStatusBar(status)
+    def _add_nav_page(self, sidebar_layout: QVBoxLayout, title: str, page: QWidget) -> None:
+        index = self.pages.addWidget(page)
+        button = QPushButton(title)
+        button.setCheckable(True)
+        button.setMinimumHeight(46)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.clicked.connect(lambda checked=False, page_index=index: self.pages.setCurrentIndex(page_index))
+        self.nav_group.addButton(button, index)
+        self._nav_buttons.append(button)
+        sidebar_layout.addWidget(button)
 
     def _open_send_page(self, documents: list[GeneratedDocument]) -> None:
+        if not hasattr(self, "send_page"):
+            return
         self.send_page.set_context(documents)
-        self.pages.setCurrentIndex(1)
-        self.nav_send.setChecked(True)
+        index = self.pages.indexOf(self.send_page)
+        if index >= 0:
+            self.pages.setCurrentIndex(index)
+            for button in self._nav_buttons:
+                if self.nav_group.id(button) == index:
+                    button.setChecked(True)
+                    break
         self.statusBar().showMessage("Подготовлен экран отправки")
 
     def _reset_after_send(self) -> None:
-        self.send_page.reset()
-        self.generate_page.reset()
-        self.pages.setCurrentIndex(0)
-        self.nav_generate.setChecked(True)
-        self.statusBar().showMessage("Отправка завершена. Форма сброшена.")
+        if hasattr(self, "send_page"):
+            self.send_page.reset()
+        if hasattr(self, "generate_page"):
+            self.generate_page.reset()
+            if self.current_user is not None:
+                self.generate_page.set_actor(self.current_user)
+        if hasattr(self, "send_page") and self.current_user is not None:
+            self.send_page.set_actor(self.current_user)
+        self.statusBar().showMessage("Отправка завершена. Формы сброшены.")
+
+    def _logout(self) -> None:
+        self.current_user = None
+        self._build_login_ui()
+        self.statusBar().showMessage("Выполнен выход")
 
     def _apply_styles(self) -> None:
         self.setStyleSheet(
@@ -1646,7 +2353,7 @@ class MainWindow(QMainWindow):
                 border: 1px solid #1d4ed8;
             }
 
-            QLineEdit, QTextEdit {
+            QLineEdit, QTextEdit, QComboBox {
                 background: #ffffff;
                 border: 1px solid #d0d7e2;
                 border-radius: 12px;
@@ -1654,7 +2361,7 @@ class MainWindow(QMainWindow):
                 font-size: 14px;
             }
 
-            QLineEdit:focus, QTextEdit:focus {
+            QLineEdit:focus, QTextEdit:focus, QComboBox:focus {
                 border: 1px solid #60a5fa;
             }
 

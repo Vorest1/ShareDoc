@@ -15,4 +15,5 @@ __all__ = [
     "fetch_contract_by_number",
     "get_connection",
     "list_contracts",
+    "create_user",
 ]

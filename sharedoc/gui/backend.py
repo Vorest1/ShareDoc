@@ -17,7 +17,15 @@ from sharedoc.db.repository import (
     list_contracts,
 )
 from sharedoc.documents.renderer import DocumentRenderError, render_document
-from sharedoc.mail.mailer import MailerError, send_document_email
+from sharedoc.mail.mailer import MailerError, get_development_recipient, send_document_email
+from sharedoc.db.auth_repository import AuthUser
+from sharedoc.services.history_service import (
+    HistoryServiceError,
+    create_dispatch_record,
+    save_generated_document_record,
+    set_dispatch_failed,
+    set_dispatch_sent,
+)
 
 
 LETTER_TEMPLATE_KEYS = {"qualification", "scientific_guidance"}
@@ -84,6 +92,10 @@ class GeneratedDocument:
     to_email: str
     subject: str
     label: str
+    document_id: int | None = None
+    client_id: int | None = None
+    contract_id: int | None = None
+    template_key: str = ""
 
 
 def _format_date(value: Any) -> str:
@@ -571,6 +583,7 @@ def generate_document_for_client(template_key: str, client_id: int) -> Path:
 def generate_documents_for_clients(
     template_key: str,
     client_ids: list[int],
+    actor: AuthUser | None = None,
 ) -> list[GeneratedDocument]:
     if template_key not in LETTER_TEMPLATE_KEYS:
         raise BackendError(
@@ -588,18 +601,32 @@ def generate_documents_for_clients(
             bundle = _build_letter_bundle(conn, int(client_id), template_key)
             output_path = render_document(bundle, template_key)
             subject, _ = _build_email_payload(template_key, bundle)
+            document_id: int | None = None
+            if actor is not None:
+                document_id = save_generated_document_record(
+                    actor=actor,
+                    template_key=template_key,
+                    document_type="letter",
+                    file_path=output_path,
+                    client_id=int(client_id),
+                    contract_id=None,
+                )
             generated.append(
                 GeneratedDocument(
                     file_path=output_path,
                     to_email=str(bundle.contract.get("representative_email") or bundle.contract.get("organization_email") or ""),
                     subject=subject,
                     label=str(bundle.contract.get("company_full_name") or bundle.contract.get("company_short_name") or f"client_{client_id}"),
+                    document_id=document_id,
+                    client_id=int(client_id),
+                    contract_id=None,
+                    template_key=template_key,
                 )
             )
 
         return generated
 
-    except (DatabaseConnectionError, DocumentRenderError) as exc:
+    except (DatabaseConnectionError, DocumentRenderError, HistoryServiceError) as exc:
         raise BackendError(str(exc)) from exc
     except Error as exc:
         raise BackendError(f"Ошибка генерации документа по компаниям: {exc}") from exc
@@ -619,6 +646,7 @@ def generate_document_for_contract(template_key: str, contract_id: int) -> Path:
 def generate_documents_for_contracts(
     template_key: str,
     contract_ids: list[int],
+    actor: AuthUser | None = None,
 ) -> list[GeneratedDocument]:
     if template_key not in CONTRACT_TEMPLATE_KEYS:
         raise BackendError(
@@ -637,12 +665,26 @@ def generate_documents_for_contracts(
             output_path = render_document(bundle, template_key)
             subject, _ = _build_email_payload(template_key, bundle)
             contract = bundle.contract
+            document_id: int | None = None
+            if actor is not None:
+                document_id = save_generated_document_record(
+                    actor=actor,
+                    template_key=template_key,
+                    document_type="contract",
+                    file_path=output_path,
+                    client_id=int(contract.get("client_id")) if contract.get("client_id") is not None else None,
+                    contract_id=int(contract_id),
+                )
             generated.append(
                 GeneratedDocument(
                     file_path=output_path,
                     to_email=str(contract.get("contact_email") or ""),
                     subject=subject,
                     label=str(contract.get("contract_number") or f"contract_{contract_id}"),
+                    document_id=document_id,
+                    client_id=int(contract.get("client_id")) if contract.get("client_id") is not None else None,
+                    contract_id=int(contract_id),
+                    template_key=template_key,
                 )
             )
 
@@ -652,6 +694,7 @@ def generate_documents_for_contracts(
         DatabaseConnectionError,
         RepositoryError,
         DocumentRenderError,
+        HistoryServiceError,
     ) as exc:
         raise BackendError(str(exc)) from exc
     except Exception as exc:
@@ -670,6 +713,8 @@ def send_document(
     subject: str,
     body: str,
     cc: str | None = None,
+    actor: AuthUser | None = None,
+    document_id: int | None = None,
 ) -> None:
     if not file_path.exists():
         raise BackendError(f"Файл не найден: {file_path}")
@@ -677,14 +722,40 @@ def send_document(
     if not to_email:
         raise BackendError("Не указан email получателя.")
 
+    dispatch_id: int | None = None
     try:
+        if actor is not None and document_id is not None:
+            dispatch_id = create_dispatch_record(
+                actor=actor,
+                document_id=document_id,
+                recipient_email=get_development_recipient(),
+                original_recipient_email=to_email,
+                subject=subject,
+            )
+
         send_document_email(
             document_path=file_path,
             to_email=to_email,
             subject=subject,
             body=body,
         )
+
+        if dispatch_id is not None:
+            set_dispatch_sent(dispatch_id)
+
     except MailerError as exc:
+        if dispatch_id is not None:
+            try:
+                set_dispatch_failed(dispatch_id, str(exc))
+            except HistoryServiceError:
+                pass
+        raise BackendError(str(exc)) from exc
+    except HistoryServiceError as exc:
         raise BackendError(str(exc)) from exc
     except Exception as exc:
+        if dispatch_id is not None:
+            try:
+                set_dispatch_failed(dispatch_id, str(exc))
+            except HistoryServiceError:
+                pass
         raise BackendError(f"Ошибка отправки письма: {exc}") from exc
